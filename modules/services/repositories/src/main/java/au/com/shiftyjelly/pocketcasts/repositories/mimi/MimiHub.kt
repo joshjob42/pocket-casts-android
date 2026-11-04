@@ -146,7 +146,9 @@ class MimiHub @Inject constructor(
     fun isHubSource(uuid: String) = prefs.getBoolean("src:$uuid", false)
 
     /** The hub's record for [uuid]; state "missing" if the hub doesn't know it, null if unreachable. */
-    fun status(uuid: String): JSONObject? = call(Request.Builder().url("$base/v1/episodes/$uuid").build())
+    fun status(uuid: String): JSONObject? = call(Request.Builder().url("$base/v1/episodes/$uuid").build())?.also {
+        if (it.optString("state") == "missing") forgetReady(uuid) // removed there (MIMI_HUB_DATA_MAX_GB)
+    }
 
     /** The hub's ad / self-promotion segments for [uuid] (JSON); null if none yet or unreachable. */
     fun segmentsJson(uuid: String): String? = try {
@@ -286,14 +288,17 @@ class MimiHub @Inject constructor(
     }
 
     private val prefetchRequested = ConcurrentHashMap.newKeySet<String>()
+    private val readyRechecked = ConcurrentHashMap.newKeySet<String>()
 
     /**
      * For queued episodes (MimiQueuePrefetcher): makes sure the hub has, or is making, [episode] at normal
      * priority, and attaches its transcript once ready. Returns true if the conversion is pending / in flight.
-     * A failed conversion is re-requested at most once per app session. Blocking network calls; call from Dispatchers.IO.
+     * A failed conversion is re-requested at most once per app session, and an episode known to be ready is checked
+     * once per session (a hub with a disk cap may have removed it; no more often, as a request wakes a server on
+     * Modal). Blocking network calls; call from Dispatchers.IO.
      */
     suspend fun prefetch(episode: PodcastEpisode): Boolean {
-        if (!usesHub(episode) || isKnownReady(episode.uuid)) return false
+        if (!usesHub(episode) || (isKnownReady(episode.uuid) && !readyRechecked.add(episode.uuid))) return false
         val url = episode.downloadUrl?.takeIf { it.isNotBlank() } ?: return false
         val status = status(episode.uuid) ?: return false
         return when (status.optString("state")) {
@@ -392,6 +397,10 @@ class MimiHub @Inject constructor(
     private fun markReady(uuid: String) {
         forOtherServer()
         prefs.edit().putBoolean(uuid, true).apply()
+    }
+
+    private fun forgetReady(uuid: String) {
+        prefs.edit().remove(uuid).apply()
     }
 
     /** The hub transcript row for [uuid], if the hub is known to have it (and [podcastUuid], if given, wants it). */
