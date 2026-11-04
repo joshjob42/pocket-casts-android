@@ -57,6 +57,61 @@ class MimiSegmentsTest {
     }
 
     @Test
+    fun `skips a pre-roll at 0_00 whose marks arrive once playback has started`() {
+        val dir = File(RuntimeEnvironment.getApplication().filesDir, "mimi_segments")
+        val e2 = episode.copy(uuid = "e2", downloadedFilePath = "/somewhere/e2.mimi")
+        assertNull(segments.toSkip(e2, 300)) // no marks yet
+        dir.resolve("e2.json").writeText("""{"segments": [{"start": 0.0, "end": 45.0, "kind": "ad", "label": "pre-roll"}]}""")
+        assertEquals("pre-roll", segments.toSkip(e2, 1_300)?.label)
+    }
+
+    @Test
+    fun `skips an ad that playback resumes in`() {
+        assertEquals(listOf("pre-roll"), play(30_000))
+    }
+
+    @Test
+    fun `plays an ad seeked into before playback started`() {
+        segments.onSeek("e1", 610_000)
+        assertEquals(listOf(null, null), play(610_300, 611_300))
+    }
+
+    @Test
+    fun `plays an ad a short seek landed in`() {
+        play(598_000, 599_000)
+        segments.onSeek("e1", 601_000)
+        assertEquals(listOf(null, null), play(601_300, 602_300))
+    }
+
+    @Test
+    fun `a small step back in the position isn't a seek`() {
+        val dir = File(RuntimeEnvironment.getApplication().filesDir, "mimi_segments")
+        val e3 = episode.copy(uuid = "e3", downloadedFilePath = "/somewhere/e3.mimi")
+        assertNull(segments.toSkip(e3, 1_300))
+        assertNull(segments.toSkip(e3, 1_250))
+        dir.resolve("e3.json").writeText("""{"segments": [{"start": 0.0, "end": 45.0, "kind": "ad", "label": "pre-roll"}]}""")
+        assertEquals("pre-roll", segments.toSkip(e3, 2_250)?.label)
+    }
+
+    @Test
+    fun `skips a segment right after a skipped one`() {
+        val dir = File(RuntimeEnvironment.getApplication().filesDir, "mimi_segments")
+        val e4 = episode.copy(uuid = "e4", downloadedFilePath = "/somewhere/e4.mimi")
+        dir.resolve("e4.json").writeText(
+            """{"segments": [{"start": 600.0, "end": 660.0, "kind": "ad", "label": "first"},
+                {"start": 660.0, "end": 700.0, "kind": "ad", "label": "second"}]}""",
+        )
+        assertNull(segments.toSkip(e4, 599_500))
+        assertEquals("first", segments.toSkip(e4, 600_200)?.label)
+        assertEquals("second", segments.toSkip(e4, 660_300)?.label)
+    }
+
+    @Test
+    fun `slow to land, a skip doesn't fire again`() {
+        assertEquals(listOf(null, "mid-roll", null, null, null), play(599_500, 600_200, 601_200, 602_200, 700_100))
+    }
+
+    @Test
     fun `skips an ad that playback runs into`() {
         assertEquals(listOf(null, null, "mid-roll", null), play(598_000, 599_000, 600_200, 700_100))
     }

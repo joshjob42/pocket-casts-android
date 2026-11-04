@@ -1207,11 +1207,13 @@ open class PlaybackManager @Inject constructor(
         seekToTimeMsInternal(duration.inWholeMilliseconds.toInt())
     }
 
-    private suspend fun seekToTimeMsInternal(positionMs: Int) {
+    /** [mimiSkip]: jumping past a segment, so a segment right after it is still run into. */
+    private suspend fun seekToTimeMsInternal(positionMs: Int, mimiSkip: Boolean = false) {
         LogBuffer.i(LogBuffer.TAG_PLAYBACK, "PlaybackService seekToTimeMsInternal %.3f ", positionMs.toDouble() / 1000.0)
         val episode = getCurrentEpisode()
         if (episode != null) {
             episode.playedUpToMs = positionMs
+            if (!mimiSkip) mimiSegments.onSeek(episode.uuid, positionMs.toLong())
         }
 
         if (player == null) {
@@ -1948,10 +1950,10 @@ open class PlaybackManager @Inject constructor(
     }
 
     /** Jumps past an ad break or self-promotion that mimi-hub found (Settings › Advanced › Mimi). */
-    private suspend fun skipMimiSegment(segment: MimiSegments.Segment) {
-        val skippedMs = segment.endMs - segment.startMs
+    private suspend fun skipMimiSegment(segment: MimiSegments.Segment, positionMs: Long) {
+        val skippedMs = segment.endMs - maxOf(segment.startMs, positionMs) // (marks that came late: some of it played)
         LogBuffer.i(LogBuffer.TAG_PLAYBACK, "Skipping mimi segment %d-%d ms: %s", segment.startMs, segment.endMs, segment.label)
-        seekToTimeMsInternal(segment.endMs.toInt())
+        seekToTimeMsInternal(segment.endMs.toInt(), mimiSkip = true)
         statsManager.addTimeSavedAutoSkipping(skippedMs)
         val message = if (segment.isAd) LR.string.player_mimi_skipped_ad else LR.string.player_mimi_skipped_promo
         showToast(application.getString(message, (skippedMs / 1000).toInt()))
@@ -2806,7 +2808,7 @@ open class PlaybackManager @Inject constructor(
 
         mimiSegments.onPlaying(episode.uuid)
         mimiSegments.toSkip(episode, positionMs.toLong())?.let { segment ->
-            skipMimiSegment(segment)
+            skipMimiSegment(segment, positionMs.toLong())
             return
         }
 
